@@ -1,0 +1,28 @@
+.root,
+.stop {
+  box-sizing: border-box;
+}
+
+.root {
+  display: inline-flex;
+  align-items: center;
+}
+
+.stop {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  height: 28px;
+  padding: 0 10px;
+  border: 1px solid var(--dsw-alias-state-error-primary);
+  border-radius: 14px;
+  background: var(--dsw-alias-interactive-bg-hover-danger);
+  color: var(--dsw-alias-state-error-primary);
+  font-size: 12px;
+  line-height: 18px;
+  font-weight: 500;
+  cursor: pointer;
+}
+.stop:hover:not(:disabled) {
+  background: var(--dsw-alias-interactive-bg-hover-danger);
+}

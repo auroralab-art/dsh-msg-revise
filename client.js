@@ -1,0 +1,467 @@
+window.__ModuleLoader__.load({
+	id: "dsh-msg-revise",
+	factory: (require) => {
+		var module = { exports: {} };
+		var exports = module.exports;
+		Object.defineProperty(exports, Symbol.toStringTag, { value: "Module" });
+		let _deepseek_ai_dsh_client_runtime_client = require("@deepseek-ai/dsh-client-runtime/client");
+		let react = require("react");
+		let react_jsx_runtime = require("react/jsx-runtime");
+		//#region src/shared.ts
+		/** Same-origin endpoint owned by the host half. */
+		const REVISE_PATH = "/msg-revise";
+		//#endregion
+		//#region src/client/controller.ts
+		function messageOf(error) {
+			return error instanceof Error ? error.message : String(error);
+		}
+		async function postEdit(operation) {
+			const response = await fetch(REVISE_PATH, {
+				method: "POST",
+				headers: {
+					accept: "application/json",
+					"content-type": "application/json"
+				},
+				body: JSON.stringify(operation)
+			});
+			const value = await response.json();
+			if (!response.ok) throw new Error(typeof value.error === "string" ? value.error : `请求失败：HTTP ${response.status}`);
+			if (typeof value.sessionId !== "string" || typeof value.queuedTurns !== "number") throw new Error("操作响应无效");
+			return {
+				sessionId: value.sessionId,
+				queuedTurns: value.queuedTurns
+			};
+		}
+		var ReviseController = class {
+			sessionId;
+			face;
+			store = (0, _deepseek_ai_dsh_client_runtime_client.createSnapshotStore)({
+				pending: false,
+				error: null
+			});
+			sessions;
+			navigationWaits = /* @__PURE__ */ new Set();
+			constructor(ctx, sessionId) {
+				this.sessionId = sessionId;
+				this.sessions = ctx.sessions;
+				this.face = {
+					hooks: { revise: this.store },
+					edit: (message, text) => this.edit(message, text),
+					stop: () => this.stop()
+				};
+			}
+			dispose() {
+				for (const cancel of [...this.navigationWaits]) cancel();
+			}
+			async edit(message, text) {
+				if (this.store.getSnapshot().pending) return false;
+				this.store.update((state) => {
+					state.pending = true;
+					state.error = null;
+				});
+				try {
+					const session = this.sessions.binding(this.sessionId)?.session;
+					if (session !== void 0) try {
+						await session.cancel();
+					} catch {}
+					const result = await postEdit({
+						action: "edit",
+						sessionId: this.sessionId,
+						eventSeq: message.eventSeq,
+						blockIndex: message.blockIndex,
+						text
+					});
+					this.store.update((state) => {
+						state.pending = false;
+					});
+					await this.openWhenListed(result.sessionId);
+					return true;
+				} catch (error) {
+					this.store.update((state) => {
+						state.pending = false;
+						state.error = messageOf(error);
+					});
+					return false;
+				}
+			}
+			async stop() {
+				const session = this.sessions.binding(this.sessionId)?.session;
+				if (session === void 0) return false;
+				try {
+					return (await session.cancel()).ok;
+				} catch {
+					return false;
+				}
+			}
+			openWhenListed(sessionId) {
+				if (this.sessions.list.getSnapshot().byId[sessionId] !== void 0) {
+					this.sessions.open(sessionId);
+					return Promise.resolve();
+				}
+				return new Promise((resolve) => {
+					let settled = false;
+					let dispose = () => {};
+					const finish = (open) => {
+						if (settled) return;
+						settled = true;
+						dispose();
+						this.navigationWaits.delete(cancel);
+						if (open) this.sessions.open(sessionId);
+						resolve();
+					};
+					const cancel = () => {
+						finish(false);
+					};
+					this.navigationWaits.add(cancel);
+					dispose = this.sessions.list.subscribe(() => {
+						if (this.sessions.list.getSnapshot().byId[sessionId] === void 0) return;
+						finish(true);
+					});
+					if (this.sessions.list.getSnapshot().byId[sessionId] !== void 0) finish(true);
+				});
+			}
+		};
+		//#endregion
+		//#region src/client/messages.ts
+		/** Zero-latency user blocks from the live conversation snapshot. */
+		function snapshotUserMessages(nodes) {
+			const result = [];
+			for (let index = 0; index < nodes.length; index += 1) {
+				const node = nodes[index];
+				if (node === void 0 || node.kind !== "user") continue;
+				const user = node;
+				let turn = 0;
+				for (let next = index + 1; next < nodes.length; next += 1) {
+					const candidate = nodes[next];
+					if (candidate?.kind === "assistant") {
+						turn = candidate.turn;
+						break;
+					}
+					if (candidate?.kind === "user") break;
+				}
+				for (const [blockIndex, block] of user.content.entries()) {
+					if (block.type !== "text" || typeof block.text !== "string") continue;
+					result.push({
+						key: `${user.seq}:${blockIndex}`,
+						turn,
+						eventSeq: user.seq,
+						blockIndex,
+						text: block.text,
+						time: user.time
+					});
+				}
+			}
+			return result;
+		}
+		//#endregion
+		//#region src/match.ts
+		/** Needle used to claim a message action row for one user block. */
+		function matchNeedle(text) {
+			const trimmed = text.trim();
+			if (trimmed.length <= 64) return trimmed;
+			return trimmed.slice(0, 48);
+		}
+		/**
+		* Claim the first unclaimed user block whose needle appears in the action-row
+		* ancestor text. Sequential claiming keeps two similar prompts from colliding.
+		*/
+		function pickUserBlock(rowText, users, claimed) {
+			const haystack = rowText.trim();
+			if (haystack.length === 0) return void 0;
+			for (const user of users) {
+				if (claimed.has(user.eventSeq)) continue;
+				if (user.text.trim().length === 0) continue;
+				if (haystack.includes(matchNeedle(user.text))) return user;
+			}
+		}
+		//#endregion
+		//#region \0dsh-css:/Users/tangxiaoxi/work/dsh-sci/dsh-msg-revise/src/client/Revise.module.css.mjs
+		const css$1 = ".l0kWMW_chip,.l0kWMW_inline,.l0kWMW_input,.l0kWMW_footer,.l0kWMW_save,.l0kWMW_cancel{box-sizing:border-box}.l0kWMW_chip{height:24px;color:var(--dsw-alias-label-secondary);cursor:pointer;background:0 0;border:none;border-radius:6px;justify-content:center;align-items:center;margin-left:4px;padding:0 8px;font-size:12px;line-height:18px;display:inline-flex}.l0kWMW_chip:hover{color:var(--dsw-alias-label-primary);background:var(--dsw-alias-interactive-bg-hover)}.l0kWMW_inline{flex-direction:column;gap:10px;width:100%;min-width:220px;display:flex}.l0kWMW_input{width:100%;min-height:24px;max-height:360px;color:inherit;font:inherit;line-height:inherit;resize:none;background:0 0;border:none;border-radius:0;margin:0;padding:0;display:block;overflow-y:auto}.l0kWMW_input:focus{outline:none}.l0kWMW_footer{justify-content:flex-end;align-items:center;gap:8px;display:flex}.l0kWMW_save,.l0kWMW_cancel{cursor:pointer;border-radius:14px;justify-content:center;align-items:center;height:28px;padding:0 12px;font-size:12px;line-height:18px;display:inline-flex}.l0kWMW_save{background:var(--dsw-alias-button-primary-fill);color:var(--dsw-alias-label-primary-foreground);border:none}.l0kWMW_save:hover:not(:disabled){background:var(--dsw-alias-button-primary-hover)}.l0kWMW_save:disabled{opacity:.4;cursor:not-allowed}.l0kWMW_cancel{border:1px solid var(--dsw-alias-border-l2);color:var(--dsw-alias-label-primary);background:0 0}.l0kWMW_cancel:hover{background:var(--dsw-alias-interactive-bg-hover)}";
+		const tagId$1 = "dsh-msg-revise/Revise.module.css";
+		if (typeof document !== "undefined" && document.querySelector("style[data-plugin-css=" + JSON.stringify(tagId$1) + "]") === null) {
+			const tag = document.createElement("style");
+			tag.dataset.plugin = "dsh-msg-revise";
+			tag.dataset.pluginCss = tagId$1;
+			tag.textContent = css$1;
+			document.head.appendChild(tag);
+		}
+		var Revise_module_css_default = {
+			"cancel": "l0kWMW_cancel",
+			"inline": "l0kWMW_inline",
+			"chip": "l0kWMW_chip",
+			"footer": "l0kWMW_footer",
+			"save": "l0kWMW_save",
+			"input": "l0kWMW_input"
+		};
+		//#endregion
+		//#region src/client/Revise.tsx
+		/**
+		* Injects 修改 on each matched user row. The editor replaces the bubble
+		* text in place — it does not open a page-level dialog.
+		*/
+		const STYLE = {
+			inline: Revise_module_css_default["inline"] ?? "",
+			input: Revise_module_css_default["input"] ?? "",
+			footer: Revise_module_css_default["footer"] ?? "",
+			chip: Revise_module_css_default["chip"] ?? "",
+			save: Revise_module_css_default["save"] ?? "",
+			cancel: Revise_module_css_default["cancel"] ?? ""
+		};
+		function userRowOf(flow) {
+			const row = flow.querySelector("[data-time-hover-root]");
+			return row instanceof HTMLElement ? row : void 0;
+		}
+		/** The text bubble inside a user flow item (sibling stack of the action row). */
+		function findBubble(flow) {
+			const stack = userRowOf(flow)?.firstElementChild;
+			if (!(stack instanceof HTMLElement)) return void 0;
+			for (let index = stack.children.length - 1; index >= 0; index -= 1) {
+				const child = stack.children[index];
+				if (!(child instanceof HTMLElement)) continue;
+				if (child.dataset.dshMsgReviseEditor === "1") continue;
+				const className = child.className;
+				if (typeof className === "string" && className.includes("bubble")) return child;
+			}
+			const last = stack.lastElementChild;
+			return last instanceof HTMLElement ? last : void 0;
+		}
+		function mountEditor(flow, block, draft, edit, close, onDraft) {
+			const bubble = findBubble(flow);
+			if (bubble === void 0) return () => {};
+			const hidden = [];
+			for (const child of Array.from(bubble.children)) {
+				if (!(child instanceof HTMLElement)) continue;
+				if (child.dataset.dshMsgReviseEditor === "1") {
+					child.remove();
+					continue;
+				}
+				child.hidden = true;
+				hidden.push(child);
+			}
+			const editor = document.createElement("div");
+			editor.className = STYLE.inline;
+			editor.dataset.dshMsgReviseEditor = "1";
+			const input = document.createElement("textarea");
+			input.className = STYLE.input;
+			input.value = draft;
+			input.setAttribute("aria-label", "修改提问");
+			const footer = document.createElement("div");
+			footer.className = STYLE.footer;
+			const save = document.createElement("button");
+			save.type = "button";
+			save.className = STYLE.save;
+			save.textContent = "重新发送";
+			const cancel = document.createElement("button");
+			cancel.type = "button";
+			cancel.className = STYLE.cancel;
+			cancel.textContent = "取消";
+			footer.append(cancel, save);
+			editor.append(input, footer);
+			bubble.appendChild(editor);
+			const chip = flow.querySelector("[data-dsh-msg-revise-btn=\"1\"]");
+			if (chip !== null) chip.hidden = true;
+			const autoSize = () => {
+				input.style.height = "auto";
+				input.style.height = `${Math.min(Math.max(input.scrollHeight, 24), 360)}px`;
+			};
+			input.addEventListener("input", () => {
+				onDraft(input.value);
+				autoSize();
+			});
+			input.focus();
+			input.setSelectionRange(input.value.length, input.value.length);
+			autoSize();
+			let mounted = true;
+			let saving = false;
+			const saveEdit = () => {
+				if (saving) return;
+				saving = true;
+				save.disabled = true;
+				edit(block, input.value).then((applied) => {
+					if (!mounted) return;
+					if (applied) {
+						close();
+						return;
+					}
+					saving = false;
+					save.disabled = false;
+				});
+			};
+			const onKey = (event) => {
+				if (event.key === "Escape") {
+					event.stopPropagation();
+					close();
+				}
+				if ((event.metaKey || event.ctrlKey) && event.key === "Enter") {
+					event.preventDefault();
+					saveEdit();
+				}
+			};
+			save.addEventListener("click", saveEdit);
+			cancel.addEventListener("click", close);
+			input.addEventListener("keydown", onKey);
+			return () => {
+				mounted = false;
+				save.removeEventListener("click", saveEdit);
+				cancel.removeEventListener("click", close);
+				input.removeEventListener("keydown", onKey);
+				editor.remove();
+				for (const child of hidden) child.hidden = false;
+				if (chip !== null) chip.hidden = false;
+			};
+		}
+		function Revise({ messages, edit }) {
+			(0, react.useEffect)(() => {
+				const cleanups = [];
+				let active;
+				let activeSeq;
+				let draft = "";
+				const closeEditor = () => {
+					active?.();
+					active = void 0;
+					activeSeq = void 0;
+					draft = "";
+				};
+				const editBlock = (flow, block, initial) => {
+					active?.();
+					draft = initial;
+					activeSeq = block.eventSeq;
+					active = mountEditor(flow, block, draft, edit, closeEditor, (text) => {
+						draft = text;
+					});
+				};
+				const sync = () => {
+					const claimed = /* @__PURE__ */ new Set();
+					const rows = Array.from(document.querySelectorAll("[data-chat-flow-kind=\"user\"] [class*=\"actions\"]"));
+					for (const row of rows) {
+						const existing = row.querySelector("[data-dsh-msg-revise-btn=\"1\"]");
+						if (row.dataset.dshMsgRevise === "1" && existing !== null) {
+							const seq = Number(row.dataset.dshMsgReviseSeq);
+							if (Number.isFinite(seq)) claimed.add(seq);
+							continue;
+						}
+						if (row.dataset.dshMsgRevise === "1" && existing === null) {
+							delete row.dataset.dshMsgRevise;
+							delete row.dataset.dshMsgReviseSeq;
+						}
+						const flow = row.closest("[data-chat-flow-kind=\"user\"]");
+						if (flow === null) continue;
+						const block = pickUserBlock((flow.textContent ?? "").trim(), messages, claimed);
+						if (block === void 0) continue;
+						claimed.add(block.eventSeq);
+						const button = document.createElement("button");
+						button.type = "button";
+						button.className = STYLE.chip;
+						button.dataset.dshMsgReviseBtn = "1";
+						button.setAttribute("aria-label", "修改");
+						button.title = "在这条消息里修改后重新发送";
+						button.textContent = "修改";
+						const open = (event) => {
+							event.preventDefault();
+							event.stopPropagation();
+							editBlock(flow, block, block.text);
+						};
+						button.addEventListener("click", open);
+						const official = Array.from(row.querySelectorAll("button")).at(-1);
+						if (official !== void 0) official.insertAdjacentElement("afterend", button);
+						else row.appendChild(button);
+						row.dataset.dshMsgRevise = "1";
+						row.dataset.dshMsgReviseSeq = String(block.eventSeq);
+						cleanups.push(() => {
+							button.removeEventListener("click", open);
+							button.remove();
+							delete row.dataset.dshMsgRevise;
+							delete row.dataset.dshMsgReviseSeq;
+						});
+					}
+					if (activeSeq === void 0) return;
+					const flow = document.querySelector(`[data-chat-flow-kind="user"] [data-dsh-msg-revise-seq="${String(activeSeq)}"]`)?.closest("[data-chat-flow-kind=\"user\"]");
+					if (flow === null || flow === void 0) return;
+					if (findBubble(flow)?.querySelector("[data-dsh-msg-revise-editor=\"1\"]") !== null) return;
+					const block = messages.find((message) => message.eventSeq === activeSeq);
+					if (block !== void 0) editBlock(flow, block, draft || block.text);
+				};
+				sync();
+				const observer = new MutationObserver(sync);
+				observer.observe(document.body, {
+					childList: true,
+					subtree: true
+				});
+				return () => {
+					observer.disconnect();
+					closeEditor();
+					for (const cleanup of cleanups.reverse()) cleanup();
+				};
+			}, [messages, edit]);
+			return null;
+		}
+		//#endregion
+		//#region \0dsh-css:/Users/tangxiaoxi/work/dsh-sci/dsh-msg-revise/src/client/Header.module.css.mjs
+		const css = ".Y8HmuG_root,.Y8HmuG_stop{box-sizing:border-box}.Y8HmuG_root{align-items:center;display:inline-flex}.Y8HmuG_stop{border:1px solid var(--dsw-alias-state-error-primary);background:var(--dsw-alias-interactive-bg-hover-danger);height:28px;color:var(--dsw-alias-state-error-primary);cursor:pointer;border-radius:14px;justify-content:center;align-items:center;padding:0 10px;font-size:12px;font-weight:500;line-height:18px;display:inline-flex}.Y8HmuG_stop:hover:not(:disabled){background:var(--dsw-alias-interactive-bg-hover-danger)}";
+		const tagId = "dsh-msg-revise/Header.module.css";
+		if (typeof document !== "undefined" && document.querySelector("style[data-plugin-css=" + JSON.stringify(tagId) + "]") === null) {
+			const tag = document.createElement("style");
+			tag.dataset.plugin = "dsh-msg-revise";
+			tag.dataset.pluginCss = tagId;
+			tag.textContent = css;
+			document.head.appendChild(tag);
+		}
+		var Header_module_css_default = {
+			"root": "Y8HmuG_root",
+			"stop": "Y8HmuG_stop"
+		};
+		//#endregion
+		//#region src/client/Header.tsx
+		function Header({ useSession, stop, edit }) {
+			const running = useSession((snapshot) => snapshot.running);
+			const nodes = useSession((snapshot) => snapshot.nodes);
+			const messages = (0, react.useMemo)(() => snapshotUserMessages(nodes), [nodes]);
+			return /* @__PURE__ */ (0, react_jsx_runtime.jsxs)(react_jsx_runtime.Fragment, { children: [/* @__PURE__ */ (0, react_jsx_runtime.jsx)(Revise, {
+				messages,
+				edit
+			}), running ? /* @__PURE__ */ (0, react_jsx_runtime.jsx)("div", {
+				className: Header_module_css_default["root"],
+				children: /* @__PURE__ */ (0, react_jsx_runtime.jsx)("button", {
+					type: "button",
+					className: Header_module_css_default["stop"],
+					title: "停止当前回复，之后可点修改并重新发送",
+					onClick: () => {
+						stop();
+					},
+					children: "■ 停止"
+				})
+			}) : null] });
+		}
+		//#endregion
+		//#region src/client/index.ts
+		const inject = [
+			"slots",
+			"conversation",
+			"connection",
+			"sessions"
+		];
+		function apply(ctx) {
+			const controllers = /* @__PURE__ */ new Map();
+			const controllerFor = (sessionId) => {
+				let controller = controllers.get(sessionId);
+				if (controller === void 0) {
+					controller = new ReviseController(ctx, sessionId);
+					controllers.set(sessionId, controller);
+				}
+				return controller;
+			};
+			ctx.slots.register({
+				name: "conversation.session.header.actions",
+				id: "msg-revise-controls",
+				order: 14,
+				inject: (sessionId) => controllerFor(sessionId).face
+			}, Header);
+		}
+		//#endregion
+		exports.apply = apply;
+		exports.inject = inject;
+		return module.exports;
+	}
+});
+
+//# sourceMappingURL=client.js.map

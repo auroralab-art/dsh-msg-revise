@@ -1,0 +1,4 @@
+# Dual-face plugin: index.mjs host, client.js browser.
+- insert:
+    - id: msg-revise
+      name: dsh-msg-revise
