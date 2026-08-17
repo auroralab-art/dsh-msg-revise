@@ -10,6 +10,7 @@ interface UserNode {
 interface AssistantNode {
   kind: 'assistant'
   turn: number
+  interrupted?: true
 }
 
 type ConversationNode = UserNode | AssistantNode | { kind: string }
@@ -43,4 +44,30 @@ export function snapshotUserMessages(nodes: readonly ConversationNode[]): Editab
     }
   }
   return result
+}
+
+/**
+ * Pencil is only for the last user prompt after the turn was stopped
+ * (or never completed). Finished Q&A rows stay icon-free.
+ */
+export function revisableAfterStop(
+  nodes: readonly ConversationNode[],
+  users: readonly EditableUserMessage[],
+  running: boolean,
+): EditableUserMessage | undefined {
+  if (running) return undefined
+  const last = users.at(-1)
+  if (last === undefined) return undefined
+  let lastUserIndex = -1
+  for (let index = 0; index < nodes.length; index += 1) {
+    const node = nodes[index]
+    if (node?.kind === 'user' && (node as UserNode).seq === last.eventSeq) lastUserIndex = index
+  }
+  if (lastUserIndex < 0) return last
+  for (let index = lastUserIndex + 1; index < nodes.length; index += 1) {
+    const node = nodes[index]
+    if (node?.kind === 'user') break
+    if (node?.kind === 'assistant' && (node as AssistantNode).interrupted !== true) return undefined
+  }
+  return last
 }

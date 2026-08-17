@@ -153,6 +153,27 @@ window.__ModuleLoader__.load({
 			}
 			return result;
 		}
+		/**
+		* Pencil is only for the last user prompt after the turn was stopped
+		* (or never completed). Finished Q&A rows stay icon-free.
+		*/
+		function revisableAfterStop(nodes, users, running) {
+			if (running) return void 0;
+			const last = users.at(-1);
+			if (last === void 0) return void 0;
+			let lastUserIndex = -1;
+			for (let index = 0; index < nodes.length; index += 1) {
+				const node = nodes[index];
+				if (node?.kind === "user" && node.seq === last.eventSeq) lastUserIndex = index;
+			}
+			if (lastUserIndex < 0) return last;
+			for (let index = lastUserIndex + 1; index < nodes.length; index += 1) {
+				const node = nodes[index];
+				if (node?.kind === "user") break;
+				if (node?.kind === "assistant" && node.interrupted !== true) return void 0;
+			}
+			return last;
+		}
 		//#endregion
 		//#region src/match.ts
 		/** Needle used to claim a message action row for one user block. */
@@ -176,7 +197,7 @@ window.__ModuleLoader__.load({
 		}
 		//#endregion
 		//#region \0dsh-css:/Users/tangxiaoxi/work/dsh-sci/dsh-msg-revise/src/client/Revise.module.css.mjs
-		const css$1 = ".l0kWMW_chip,.l0kWMW_inline,.l0kWMW_input,.l0kWMW_footer,.l0kWMW_save,.l0kWMW_cancel{box-sizing:border-box}.l0kWMW_chip{height:24px;color:var(--dsw-alias-label-secondary);cursor:pointer;background:0 0;border:none;border-radius:6px;justify-content:center;align-items:center;margin-left:4px;padding:0 8px;font-size:12px;line-height:18px;display:inline-flex}.l0kWMW_chip:hover{color:var(--dsw-alias-label-primary);background:var(--dsw-alias-interactive-bg-hover)}.l0kWMW_inline{flex-direction:column;gap:10px;width:100%;min-width:220px;display:flex}.l0kWMW_input{width:100%;min-height:24px;max-height:360px;color:inherit;font:inherit;line-height:inherit;resize:none;background:0 0;border:none;border-radius:0;margin:0;padding:0;display:block;overflow-y:auto}.l0kWMW_input:focus{outline:none}.l0kWMW_footer{justify-content:flex-end;align-items:center;gap:8px;display:flex}.l0kWMW_save,.l0kWMW_cancel{cursor:pointer;border-radius:14px;justify-content:center;align-items:center;height:28px;padding:0 12px;font-size:12px;line-height:18px;display:inline-flex}.l0kWMW_save{background:var(--dsw-alias-button-primary-fill);color:var(--dsw-alias-label-primary-foreground);border:none}.l0kWMW_save:hover:not(:disabled){background:var(--dsw-alias-button-primary-hover)}.l0kWMW_save:disabled{opacity:.4;cursor:not-allowed}.l0kWMW_cancel{border:1px solid var(--dsw-alias-border-l2);color:var(--dsw-alias-label-primary);background:0 0}.l0kWMW_cancel:hover{background:var(--dsw-alias-interactive-bg-hover)}";
+		const css$1 = ".l0kWMW_chip,.l0kWMW_inline,.l0kWMW_input,.l0kWMW_footer,.l0kWMW_save,.l0kWMW_cancel{box-sizing:border-box}.l0kWMW_chip{width:24px;height:24px;color:var(--dsw-alias-label-secondary);cursor:pointer;background:0 0;border:none;border-radius:6px;justify-content:center;align-items:center;margin-left:2px;padding:0;display:inline-flex}.l0kWMW_chip:hover{color:var(--dsw-alias-label-primary);background:var(--dsw-alias-interactive-bg-hover)}.l0kWMW_inline{flex-direction:column;gap:10px;width:100%;min-width:220px;display:flex}.l0kWMW_input{width:100%;min-height:24px;max-height:360px;color:inherit;font:inherit;line-height:inherit;resize:none;background:0 0;border:none;border-radius:0;margin:0;padding:0;display:block;overflow-y:auto}.l0kWMW_input:focus{outline:none}.l0kWMW_footer{justify-content:flex-end;align-items:center;gap:8px;display:flex}.l0kWMW_save,.l0kWMW_cancel{cursor:pointer;border-radius:14px;justify-content:center;align-items:center;height:28px;padding:0 12px;font-size:12px;line-height:18px;display:inline-flex}.l0kWMW_save{background:var(--dsw-alias-button-primary-fill);color:var(--dsw-alias-label-primary-foreground);border:none}.l0kWMW_save:hover:not(:disabled){background:var(--dsw-alias-button-primary-hover)}.l0kWMW_save:disabled{opacity:.4;cursor:not-allowed}.l0kWMW_cancel{border:1px solid var(--dsw-alias-border-l2);color:var(--dsw-alias-label-primary);background:0 0}.l0kWMW_cancel:hover{background:var(--dsw-alias-interactive-bg-hover)}";
 		const tagId$1 = "dsh-msg-revise/Revise.module.css";
 		if (typeof document !== "undefined" && document.querySelector("style[data-plugin-css=" + JSON.stringify(tagId$1) + "]") === null) {
 			const tag = document.createElement("style");
@@ -186,12 +207,12 @@ window.__ModuleLoader__.load({
 			document.head.appendChild(tag);
 		}
 		var Revise_module_css_default = {
-			"cancel": "l0kWMW_cancel",
-			"inline": "l0kWMW_inline",
+			"input": "l0kWMW_input",
 			"chip": "l0kWMW_chip",
+			"inline": "l0kWMW_inline",
 			"footer": "l0kWMW_footer",
 			"save": "l0kWMW_save",
-			"input": "l0kWMW_input"
+			"cancel": "l0kWMW_cancel"
 		};
 		//#endregion
 		//#region src/client/Revise.tsx
@@ -207,6 +228,22 @@ window.__ModuleLoader__.load({
 			save: Revise_module_css_default["save"] ?? "",
 			cancel: Revise_module_css_default["cancel"] ?? ""
 		};
+		function pencilIcon() {
+			const svg = document.createElementNS("http://www.w3.org/2000/svg", "svg");
+			svg.setAttribute("width", "16");
+			svg.setAttribute("height", "16");
+			svg.setAttribute("viewBox", "0 0 16 16");
+			svg.setAttribute("fill", "none");
+			svg.setAttribute("aria-hidden", "true");
+			const path = document.createElementNS("http://www.w3.org/2000/svg", "path");
+			path.setAttribute("d", "M10.8 2.7l2.5 2.5-8 8H2.8v-2.5l8-8z");
+			path.setAttribute("stroke", "currentColor");
+			path.setAttribute("stroke-width", "1.25");
+			path.setAttribute("stroke-linejoin", "round");
+			path.setAttribute("stroke-linecap", "round");
+			svg.appendChild(path);
+			return svg;
+		}
 		function userRowOf(flow) {
 			const row = flow.querySelector("[data-time-hover-root]");
 			return row instanceof HTMLElement ? row : void 0;
@@ -310,7 +347,7 @@ window.__ModuleLoader__.load({
 				if (chip !== null) chip.hidden = false;
 			};
 		}
-		function Revise({ messages, edit }) {
+		function Revise({ allowed, edit }) {
 			(0, react.useEffect)(() => {
 				const cleanups = [];
 				let active;
@@ -330,23 +367,29 @@ window.__ModuleLoader__.load({
 						draft = text;
 					});
 				};
+				const detach = (row) => {
+					row.querySelector("[data-dsh-msg-revise-btn=\"1\"]")?.remove();
+					delete row.dataset.dshMsgRevise;
+					delete row.dataset.dshMsgReviseSeq;
+				};
 				const sync = () => {
 					const claimed = /* @__PURE__ */ new Set();
+					const targets = allowed === void 0 ? [] : [allowed];
 					const rows = Array.from(document.querySelectorAll("[data-chat-flow-kind=\"user\"] [class*=\"actions\"]"));
 					for (const row of rows) {
 						const existing = row.querySelector("[data-dsh-msg-revise-btn=\"1\"]");
 						if (row.dataset.dshMsgRevise === "1" && existing !== null) {
 							const seq = Number(row.dataset.dshMsgReviseSeq);
-							if (Number.isFinite(seq)) claimed.add(seq);
-							continue;
+							if (allowed !== void 0 && seq === allowed.eventSeq) {
+								claimed.add(seq);
+								continue;
+							}
+							detach(row);
 						}
-						if (row.dataset.dshMsgRevise === "1" && existing === null) {
-							delete row.dataset.dshMsgRevise;
-							delete row.dataset.dshMsgReviseSeq;
-						}
+						if (allowed === void 0) continue;
 						const flow = row.closest("[data-chat-flow-kind=\"user\"]");
 						if (flow === null) continue;
-						const block = pickUserBlock((flow.textContent ?? "").trim(), messages, claimed);
+						const block = pickUserBlock((flow.textContent ?? "").trim(), targets, claimed);
 						if (block === void 0) continue;
 						claimed.add(block.eventSeq);
 						const button = document.createElement("button");
@@ -354,8 +397,8 @@ window.__ModuleLoader__.load({
 						button.className = STYLE.chip;
 						button.dataset.dshMsgReviseBtn = "1";
 						button.setAttribute("aria-label", "修改");
-						button.title = "在这条消息里修改后重新发送";
-						button.textContent = "修改";
+						button.title = "修改后重新发送";
+						button.appendChild(pencilIcon());
 						const open = (event) => {
 							event.preventDefault();
 							event.stopPropagation();
@@ -374,12 +417,14 @@ window.__ModuleLoader__.load({
 							delete row.dataset.dshMsgReviseSeq;
 						});
 					}
-					if (activeSeq === void 0) return;
+					if (activeSeq === void 0 || allowed === void 0 || activeSeq !== allowed.eventSeq) {
+						if (activeSeq !== void 0 && (allowed === void 0 || activeSeq !== allowed.eventSeq)) closeEditor();
+						return;
+					}
 					const flow = document.querySelector(`[data-chat-flow-kind="user"] [data-dsh-msg-revise-seq="${String(activeSeq)}"]`)?.closest("[data-chat-flow-kind=\"user\"]");
 					if (flow === null || flow === void 0) return;
 					if (findBubble(flow)?.querySelector("[data-dsh-msg-revise-editor=\"1\"]") !== null) return;
-					const block = messages.find((message) => message.eventSeq === activeSeq);
-					if (block !== void 0) editBlock(flow, block, draft || block.text);
+					editBlock(flow, allowed, draft || allowed.text);
 				};
 				sync();
 				const observer = new MutationObserver(sync);
@@ -392,7 +437,7 @@ window.__ModuleLoader__.load({
 					closeEditor();
 					for (const cleanup of cleanups.reverse()) cleanup();
 				};
-			}, [messages, edit]);
+			}, [allowed, edit]);
 			return null;
 		}
 		//#endregion
@@ -416,8 +461,13 @@ window.__ModuleLoader__.load({
 			const running = useSession((snapshot) => snapshot.running);
 			const nodes = useSession((snapshot) => snapshot.nodes);
 			const messages = (0, react.useMemo)(() => snapshotUserMessages(nodes), [nodes]);
-			return /* @__PURE__ */ (0, react_jsx_runtime.jsxs)(react_jsx_runtime.Fragment, { children: [/* @__PURE__ */ (0, react_jsx_runtime.jsx)(Revise, {
+			const allowed = (0, react.useMemo)(() => revisableAfterStop(nodes, messages, running), [
+				nodes,
 				messages,
+				running
+			]);
+			return /* @__PURE__ */ (0, react_jsx_runtime.jsxs)(react_jsx_runtime.Fragment, { children: [/* @__PURE__ */ (0, react_jsx_runtime.jsx)(Revise, {
+				allowed,
 				edit
 			}), running ? /* @__PURE__ */ (0, react_jsx_runtime.jsx)("div", {
 				className: Header_module_css_default["root"],

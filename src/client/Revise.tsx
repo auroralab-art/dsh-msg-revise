@@ -19,6 +19,23 @@ const STYLE = {
 
 type EditorCleanup = () => void
 
+function pencilIcon(): SVGSVGElement {
+  const svg = document.createElementNS('http://www.w3.org/2000/svg', 'svg')
+  svg.setAttribute('width', '16')
+  svg.setAttribute('height', '16')
+  svg.setAttribute('viewBox', '0 0 16 16')
+  svg.setAttribute('fill', 'none')
+  svg.setAttribute('aria-hidden', 'true')
+  const path = document.createElementNS('http://www.w3.org/2000/svg', 'path')
+  path.setAttribute('d', 'M10.8 2.7l2.5 2.5-8 8H2.8v-2.5l8-8z')
+  path.setAttribute('stroke', 'currentColor')
+  path.setAttribute('stroke-width', '1.25')
+  path.setAttribute('stroke-linejoin', 'round')
+  path.setAttribute('stroke-linecap', 'round')
+  svg.appendChild(path)
+  return svg
+}
+
 function userRowOf(flow: Element): HTMLElement | undefined {
   const row = flow.querySelector('[data-time-hover-root]')
   return row instanceof HTMLElement ? row : undefined
@@ -136,10 +153,10 @@ function mountEditor(
 }
 
 export function Revise({
-  messages,
+  allowed,
   edit,
 }: {
-  messages: readonly EditableUserMessage[]
+  allowed: EditableUserMessage | undefined
   edit: ReviseFace['edit']
 }): null {
   useEffect(() => {
@@ -162,24 +179,32 @@ export function Revise({
       active = mountEditor(flow, block, draft, edit, closeEditor, (text) => { draft = text })
     }
 
+    const detach = (row: HTMLElement): void => {
+      const existing = row.querySelector<HTMLElement>('[data-dsh-msg-revise-btn="1"]')
+      existing?.remove()
+      delete row.dataset.dshMsgRevise
+      delete row.dataset.dshMsgReviseSeq
+    }
+
     const sync = (): void => {
       const claimed = new Set<number>()
+      const targets = allowed === undefined ? [] : [allowed]
       const rows = Array.from(document.querySelectorAll<HTMLElement>('[data-chat-flow-kind="user"] [class*="actions"]'))
       for (const row of rows) {
         const existing = row.querySelector<HTMLElement>('[data-dsh-msg-revise-btn="1"]')
         if (row.dataset.dshMsgRevise === '1' && existing !== null) {
           const seq = Number(row.dataset.dshMsgReviseSeq)
-          if (Number.isFinite(seq)) claimed.add(seq)
-          continue
+          if (allowed !== undefined && seq === allowed.eventSeq) {
+            claimed.add(seq)
+            continue
+          }
+          detach(row)
         }
-        if (row.dataset.dshMsgRevise === '1' && existing === null) {
-          delete row.dataset.dshMsgRevise
-          delete row.dataset.dshMsgReviseSeq
-        }
+        if (allowed === undefined) continue
         const flow = row.closest('[data-chat-flow-kind="user"]')
         if (flow === null) continue
         const text = (flow.textContent ?? '').trim()
-        const block = pickUserBlock(text, messages, claimed)
+        const block = pickUserBlock(text, targets, claimed)
         if (block === undefined) continue
         claimed.add(block.eventSeq)
         const button = document.createElement('button')
@@ -187,8 +212,8 @@ export function Revise({
         button.className = STYLE.chip
         button.dataset.dshMsgReviseBtn = '1'
         button.setAttribute('aria-label', '修改')
-        button.title = '在这条消息里修改后重新发送'
-        button.textContent = '修改'
+        button.title = '修改后重新发送'
+        button.appendChild(pencilIcon())
         const open = (event: Event): void => {
           event.preventDefault()
           event.stopPropagation()
@@ -208,13 +233,15 @@ export function Revise({
         })
       }
 
-      if (activeSeq === undefined) return
+      if (activeSeq === undefined || allowed === undefined || activeSeq !== allowed.eventSeq) {
+        if (activeSeq !== undefined && (allowed === undefined || activeSeq !== allowed.eventSeq)) closeEditor()
+        return
+      }
       const live = document.querySelector(`[data-chat-flow-kind="user"] [data-dsh-msg-revise-seq="${String(activeSeq)}"]`)
       const flow = live?.closest('[data-chat-flow-kind="user"]')
       if (flow === null || flow === undefined) return
       if (findBubble(flow)?.querySelector('[data-dsh-msg-revise-editor="1"]') !== null) return
-      const block = messages.find(message => message.eventSeq === activeSeq)
-      if (block !== undefined) editBlock(flow, block, draft || block.text)
+      editBlock(flow, allowed, draft || allowed.text)
     }
 
     sync()
@@ -225,7 +252,7 @@ export function Revise({
       closeEditor()
       for (const cleanup of cleanups.reverse()) cleanup()
     }
-  }, [messages, edit])
+  }, [allowed, edit])
 
   return null
 }

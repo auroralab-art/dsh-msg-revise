@@ -1,7 +1,7 @@
 import { useMemo, type ReactNode } from 'react'
 import type { InjectFace, PropsRuntime } from '@deepseek-ai/dsh-client-ui-slots'
 import type { ReviseFace } from './controller.ts'
-import { snapshotUserMessages } from './messages.ts'
+import { revisableAfterStop, snapshotUserMessages } from './messages.ts'
 import { Revise } from './Revise.tsx'
 import styles from './Header.module.css'
 
@@ -11,10 +11,11 @@ export function Header({ useSession, stop, edit }: HeaderProps): ReactNode {
   const running = useSession(snapshot => snapshot.running)
   const nodes = useSession(snapshot => snapshot.nodes)
   const messages = useMemo(() => snapshotUserMessages(nodes), [nodes])
+  const allowed = useMemo(() => revisableAfterStop(nodes, messages, running), [nodes, messages, running])
 
   return (
     <>
-      <Revise messages={messages} edit={edit} />
+      <Revise allowed={allowed} edit={edit} />
       {running
         ? (
           <div className={styles['root']}>

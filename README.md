@@ -7,7 +7,7 @@ The previous version is archived so the sidebar stays one conversation. Version 
 ## Use
 
 1. While a reply is running, press **■ 停止** in the session header (or the stock stop).
-2. The user-message action row shows **修改**.
+2. After **■ 停止**, a pencil appears on the last user message.
 3. The bubble text becomes an in-place editor (no dialog). Press **重新发送**. The plugin forks from before that turn and re-runs it with the new prompt.
 
 Settled user messages can be revised the same way.
