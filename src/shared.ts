@@ -5,9 +5,11 @@ export const PLUGIN_ID = 'dsh-msg-revise'
 
 export const VIEW_ORDER = 14
 
+export type VersionOperation = 'edit' | 'unsend'
+
 export interface VersionEffect {
   id: string
-  operation: 'edit'
+  operation: VersionOperation
   cascade: 'truncate'
   targetTurn: number
   targetEventSeq: number
@@ -41,9 +43,17 @@ export interface EditOperation {
   text: string
 }
 
+export interface UnsendOperation {
+  action: 'unsend'
+  sessionId: string
+}
+
+export type ReviseOperation = EditOperation | UnsendOperation
+
 export interface EditResult {
   sessionId: string
   queuedTurns: number
+  restoredText?: string
 }
 
 export const MAX_REQUEST_BODY_BYTES = 64 * 1024

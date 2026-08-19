@@ -1,7 +1,7 @@
 {
   "name": "dsh-msg-revise",
   "version": "0.1.0",
-  "description": "Stop a DSH turn, press 修改 on the user message, edit, then 重新发送.",
+  "description": "After the native DSH stop, press 修改 on the user message, edit, then 重新发送.",
   "type": "module",
   "main": "./index.mjs",
   "exports": {

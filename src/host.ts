@@ -11,7 +11,15 @@ import type { Workspace } from '@deepseek-ai/dsh-workspace'
 import { MAX_REQUEST_BODY_BYTES, REVISE_PATH, type EditResult } from './shared.ts'
 import { BodyTooLargeError, decodeEdit, isTrustedRequest } from './http.ts'
 import { rememberVersion } from './store.ts'
-import { planEdit, type FoldEvent } from './turns.ts'
+import { hasFirstToken } from './ttft.ts'
+import { planEdit, planUnsend, type FoldEvent } from './turns.ts'
+
+class FirstTokenReachedError extends Error {
+  constructor() {
+    super('首字已到达')
+    this.name = 'FirstTokenReachedError'
+  }
+}
 
 interface HttpRequestLike {
   method?: string
@@ -258,6 +266,39 @@ async function runEdit(ctx: Context, sessionId: string, eventSeq: number, blockI
   })
 }
 
+async function runUnsend(ctx: Context, sessionId: string): Promise<EditResult> {
+  const sourceId = sessionId as SessionId
+  return withSourceAgent(ctx, sourceId, async (source) => {
+    const events = source.session.events
+    const folded = asFoldEvents(events)
+    if (hasFirstToken(folded)) throw new FirstTokenReachedError()
+    const childId = ('session-' + crypto.randomUUID()) as SessionId
+    const inverses: OperationInverse[] = []
+    try {
+      const plan = planUnsend(sessionId, folded)
+      const options = agentOptions(events, source.options)
+      const seed = inheritedSeed(source.session, plan.boundary)
+      const child = await createVersionAgent(ctx, source.session, childId, seed, options)
+      inverses.push(() => child.dispose())
+      const workspace = sourceWorkspace(ctx, sourceId)
+      if (workspace !== undefined) {
+        await workspace.attachSession(childId)
+        inverses.push(() => workspace.detachSession(childId))
+      }
+      rememberVersion(childId, plan.version)
+      inverses.length = 0
+      return { sessionId: childId, queuedTurns: 0, restoredText: plan.restoredText }
+    } catch (error: unknown) {
+      try {
+        await recoverOperation(inverses)
+      } catch (recoveryError: unknown) {
+        throw new AggregateError([error, recoveryError], '收回提问及其恢复均失败。')
+      }
+      throw error
+    }
+  })
+}
+
 function readJsonBody(request: HttpRequestLike): Promise<unknown> {
   return new Promise((resolve, reject) => {
     const contentLength = Number(headerValue(request, 'content-length') ?? '0')
@@ -317,7 +358,9 @@ async function handleRoute(ctx: Context, request: HttpRequestLike, response: Htt
       return
     }
     const operation = decodeEdit(await readJsonBody(request))
-    const result = await runEdit(ctx, operation.sessionId, operation.eventSeq, operation.blockIndex, operation.text)
+    const result = operation.action === 'unsend'
+      ? await runUnsend(ctx, operation.sessionId)
+      : await runEdit(ctx, operation.sessionId, operation.eventSeq, operation.blockIndex, operation.text)
     void finalizeEdit(ctx, operation.sessionId as SessionId, result.sessionId as SessionId)
     respondJson(response, 200, result)
   } catch (error: unknown) {

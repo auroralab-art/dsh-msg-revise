@@ -37,6 +37,13 @@ describe('decodeEdit', () => {
     })
   })
 
+  it('reads an unsend body', () => {
+    expect(decodeEdit({ action: 'unsend', sessionId: 'session-1' })).toEqual({
+      action: 'unsend',
+      sessionId: 'session-1',
+    })
+  })
+
   it('rejects a non-edit action', () => {
     expect(() => decodeEdit({ action: 'reroll', sessionId: 's' })).toThrow(/action/)
   })

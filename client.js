@@ -11,11 +11,39 @@ window.__ModuleLoader__.load({
 		/** Same-origin endpoint owned by the host half. */
 		const REVISE_PATH = "/msg-revise";
 		//#endregion
+		//#region src/client/ttft.ts
+		function blockText(block) {
+			if (typeof block !== "object" || block === null) return void 0;
+			const text = block.text;
+			return typeof text === "string" ? text : void 0;
+		}
+		function assistantHasToken(node) {
+			if (node.kind !== "assistant") return false;
+			if (node.timing?.firstTokenTime != null) return true;
+			return node.blocks?.some((block) => (blockText(block)?.length ?? 0) > 0) === true;
+		}
+		/** TTFT of the turn after the last user node. Prior replies do not count. */
+		function snapshotHasFirstToken(snapshot) {
+			let lastUser = -1;
+			for (let index = 0; index < snapshot.nodes.length; index += 1) if (snapshot.nodes[index]?.kind === "user") lastUser = index;
+			for (let index = lastUser + 1; index < snapshot.nodes.length; index += 1) {
+				const node = snapshot.nodes[index];
+				if (node === void 0) continue;
+				if (node.kind === "user") break;
+				if (assistantHasToken(node)) return true;
+			}
+			return snapshot.partial?.blocks.some((block) => (blockText(block)?.length ?? 0) > 0) === true;
+		}
+		/** Native composer stop (or any idle edge) before the last turn's first token. */
+		function shouldUnsendOnIdle(wasRunning, running, hasFirstToken) {
+			return wasRunning === true && running === false && !hasFirstToken;
+		}
+		//#endregion
 		//#region src/client/controller.ts
 		function messageOf(error) {
 			return error instanceof Error ? error.message : String(error);
 		}
-		async function postEdit(operation) {
+		async function postRevise(operation) {
 			const response = await fetch(REVISE_PATH, {
 				method: "POST",
 				headers: {
@@ -27,12 +55,10 @@ window.__ModuleLoader__.load({
 			const value = await response.json();
 			if (!response.ok) throw new Error(typeof value.error === "string" ? value.error : `请求失败：HTTP ${response.status}`);
 			if (typeof value.sessionId !== "string" || typeof value.queuedTurns !== "number") throw new Error("操作响应无效");
-			return {
-				sessionId: value.sessionId,
-				queuedTurns: value.queuedTurns
-			};
+			return value;
 		}
 		var ReviseController = class {
+			ctx;
 			sessionId;
 			face;
 			store = (0, _deepseek_ai_dsh_client_runtime_client.createSnapshotStore)({
@@ -42,16 +68,49 @@ window.__ModuleLoader__.load({
 			sessions;
 			navigationWaits = /* @__PURE__ */ new Set();
 			constructor(ctx, sessionId) {
+				this.ctx = ctx;
 				this.sessionId = sessionId;
 				this.sessions = ctx.sessions;
 				this.face = {
 					hooks: { revise: this.store },
-					edit: (message, text) => this.edit(message, text),
-					stop: () => this.stop()
+					edit: (message, text) => this.edit(message, text)
 				};
+				ctx.effect(() => this.observeNativeCancel(), `msg-revise: observe native cancel ${sessionId}`);
 			}
 			dispose() {
 				for (const cancel of [...this.navigationWaits]) cancel();
+			}
+			/**
+			* Native InputBar owns stop (`session.cancel`). This service only reacts:
+			* a running→idle edge before TTFT unsends the last prompt into the composer.
+			*/
+			observeNativeCancel() {
+				let lastRunning;
+				let sessionFace;
+				let sessionDispose;
+				const bind = () => {
+					const next = this.sessions.binding(this.sessionId)?.session;
+					if (next === sessionFace) return;
+					sessionDispose?.();
+					sessionFace = next;
+					lastRunning = next?.getSnapshot().running;
+					sessionDispose = next?.subscribe(() => {
+						if (sessionFace !== next) return;
+						const snapshot = next.getSnapshot();
+						const wasRunning = lastRunning;
+						lastRunning = snapshot.running;
+						if (!shouldUnsendOnIdle(wasRunning, snapshot.running, snapshotHasFirstToken(snapshot))) return;
+						this.unsendAfterNativeStop();
+					});
+				};
+				bind();
+				const disposeList = this.sessions.list.subscribe(() => {
+					bind();
+				});
+				return () => {
+					disposeList();
+					sessionDispose?.();
+				};
 			}
 			async edit(message, text) {
 				if (this.store.getSnapshot().pending) return false;
@@ -64,7 +123,7 @@ window.__ModuleLoader__.load({
 					if (session !== void 0) try {
 						await session.cancel();
 					} catch {}
-					const result = await postEdit({
+					const result = await postRevise({
 						action: "edit",
 						sessionId: this.sessionId,
 						eventSeq: message.eventSeq,
@@ -84,14 +143,40 @@ window.__ModuleLoader__.load({
 					return false;
 				}
 			}
-			async stop() {
-				const session = this.sessions.binding(this.sessionId)?.session;
-				if (session === void 0) return false;
+			async unsendAfterNativeStop() {
+				if (this.store.getSnapshot().pending) return;
+				this.store.update((state) => {
+					state.pending = true;
+					state.error = null;
+				});
 				try {
-					return (await session.cancel()).ok;
-				} catch {
-					return false;
+					const result = await postRevise({
+						action: "unsend",
+						sessionId: this.sessionId
+					});
+					this.store.update((state) => {
+						state.pending = false;
+					});
+					await this.openWhenListed(result.sessionId);
+					if (typeof result.restoredText === "string") this.restoreDraft(result.sessionId, result.restoredText);
+				} catch (error) {
+					if (messageOf(error).includes("首字已到达")) {
+						this.store.update((state) => {
+							state.pending = false;
+						});
+						return;
+					}
+					this.store.update((state) => {
+						state.pending = false;
+						state.error = messageOf(error);
+					});
 				}
+			}
+			restoreDraft(sessionId, text) {
+				const conversation = this.ctx.get("conversation");
+				const scope = this.sessions.scope(sessionId);
+				if (conversation === void 0 || scope === void 0) return;
+				conversation.input.for(scope).setDraft(text);
 			}
 			openWhenListed(sessionId) {
 				if (this.sessions.list.getSnapshot().byId[sessionId] !== void 0) {
@@ -154,7 +239,7 @@ window.__ModuleLoader__.load({
 			return result;
 		}
 		/**
-		* Pencil is only for the last user prompt after the turn was stopped
+		* Pencil is only for the last user prompt after the native stop
 		* (or never completed). Finished Q&A rows stay icon-free.
 		*/
 		function revisableAfterStop(nodes, users, running) {
@@ -197,22 +282,22 @@ window.__ModuleLoader__.load({
 		}
 		//#endregion
 		//#region \0dsh-css:/Users/tangxiaoxi/work/dsh-sci/dsh-msg-revise/src/client/Revise.module.css.mjs
-		const css$1 = ".l0kWMW_chip,.l0kWMW_inline,.l0kWMW_input,.l0kWMW_footer,.l0kWMW_save,.l0kWMW_cancel{box-sizing:border-box}.l0kWMW_chip{width:24px;height:24px;color:var(--dsw-alias-label-secondary);cursor:pointer;background:0 0;border:none;border-radius:6px;justify-content:center;align-items:center;margin-left:2px;padding:0;display:inline-flex}.l0kWMW_chip:hover{color:var(--dsw-alias-label-primary);background:var(--dsw-alias-interactive-bg-hover)}.l0kWMW_inline{flex-direction:column;gap:10px;width:100%;min-width:220px;display:flex}.l0kWMW_input{width:100%;min-height:24px;max-height:360px;color:inherit;font:inherit;line-height:inherit;resize:none;background:0 0;border:none;border-radius:0;margin:0;padding:0;display:block;overflow-y:auto}.l0kWMW_input:focus{outline:none}.l0kWMW_footer{justify-content:flex-end;align-items:center;gap:8px;display:flex}.l0kWMW_save,.l0kWMW_cancel{cursor:pointer;border-radius:14px;justify-content:center;align-items:center;height:28px;padding:0 12px;font-size:12px;line-height:18px;display:inline-flex}.l0kWMW_save{background:var(--dsw-alias-button-primary-fill);color:var(--dsw-alias-label-primary-foreground);border:none}.l0kWMW_save:hover:not(:disabled){background:var(--dsw-alias-button-primary-hover)}.l0kWMW_save:disabled{opacity:.4;cursor:not-allowed}.l0kWMW_cancel{border:1px solid var(--dsw-alias-border-l2);color:var(--dsw-alias-label-primary);background:0 0}.l0kWMW_cancel:hover{background:var(--dsw-alias-interactive-bg-hover)}";
-		const tagId$1 = "dsh-msg-revise/Revise.module.css";
-		if (typeof document !== "undefined" && document.querySelector("style[data-plugin-css=" + JSON.stringify(tagId$1) + "]") === null) {
+		const css = ".l0kWMW_chip,.l0kWMW_inline,.l0kWMW_input,.l0kWMW_footer,.l0kWMW_save,.l0kWMW_cancel{box-sizing:border-box}.l0kWMW_chip{width:24px;height:24px;color:var(--dsw-alias-label-secondary);cursor:pointer;background:0 0;border:none;border-radius:6px;justify-content:center;align-items:center;margin-left:2px;padding:0;display:inline-flex}.l0kWMW_chip:hover{color:var(--dsw-alias-label-primary);background:var(--dsw-alias-interactive-bg-hover)}.l0kWMW_inline{flex-direction:column;gap:10px;width:100%;min-width:220px;display:flex}.l0kWMW_input{width:100%;min-height:24px;max-height:360px;color:inherit;font:inherit;line-height:inherit;resize:none;background:0 0;border:none;border-radius:0;margin:0;padding:0;display:block;overflow-y:auto}.l0kWMW_input:focus{outline:none}.l0kWMW_footer{justify-content:flex-end;align-items:center;gap:8px;display:flex}.l0kWMW_save,.l0kWMW_cancel{cursor:pointer;border-radius:14px;justify-content:center;align-items:center;height:28px;padding:0 12px;font-size:12px;line-height:18px;display:inline-flex}.l0kWMW_save{background:var(--dsw-alias-button-primary-fill);color:var(--dsw-alias-label-primary-foreground);border:none}.l0kWMW_save:hover:not(:disabled){background:var(--dsw-alias-button-primary-hover)}.l0kWMW_save:disabled{opacity:.4;cursor:not-allowed}.l0kWMW_cancel{border:1px solid var(--dsw-alias-border-l2);color:var(--dsw-alias-label-primary);background:0 0}.l0kWMW_cancel:hover{background:var(--dsw-alias-interactive-bg-hover)}";
+		const tagId = "dsh-msg-revise/Revise.module.css";
+		if (typeof document !== "undefined" && document.querySelector("style[data-plugin-css=" + JSON.stringify(tagId) + "]") === null) {
 			const tag = document.createElement("style");
 			tag.dataset.plugin = "dsh-msg-revise";
-			tag.dataset.pluginCss = tagId$1;
-			tag.textContent = css$1;
+			tag.dataset.pluginCss = tagId;
+			tag.textContent = css;
 			document.head.appendChild(tag);
 		}
 		var Revise_module_css_default = {
-			"input": "l0kWMW_input",
-			"chip": "l0kWMW_chip",
 			"inline": "l0kWMW_inline",
 			"footer": "l0kWMW_footer",
+			"cancel": "l0kWMW_cancel",
 			"save": "l0kWMW_save",
-			"cancel": "l0kWMW_cancel"
+			"input": "l0kWMW_input",
+			"chip": "l0kWMW_chip"
 		};
 		//#endregion
 		//#region src/client/Revise.tsx
@@ -441,23 +526,9 @@ window.__ModuleLoader__.load({
 			return null;
 		}
 		//#endregion
-		//#region \0dsh-css:/Users/tangxiaoxi/work/dsh-sci/dsh-msg-revise/src/client/Header.module.css.mjs
-		const css = ".Y8HmuG_root,.Y8HmuG_stop{box-sizing:border-box}.Y8HmuG_root{align-items:center;display:inline-flex}.Y8HmuG_stop{border:1px solid var(--dsw-alias-state-error-primary);background:var(--dsw-alias-interactive-bg-hover-danger);height:28px;color:var(--dsw-alias-state-error-primary);cursor:pointer;border-radius:14px;justify-content:center;align-items:center;padding:0 10px;font-size:12px;font-weight:500;line-height:18px;display:inline-flex}.Y8HmuG_stop:hover:not(:disabled){background:var(--dsw-alias-interactive-bg-hover-danger)}";
-		const tagId = "dsh-msg-revise/Header.module.css";
-		if (typeof document !== "undefined" && document.querySelector("style[data-plugin-css=" + JSON.stringify(tagId) + "]") === null) {
-			const tag = document.createElement("style");
-			tag.dataset.plugin = "dsh-msg-revise";
-			tag.dataset.pluginCss = tagId;
-			tag.textContent = css;
-			document.head.appendChild(tag);
-		}
-		var Header_module_css_default = {
-			"root": "Y8HmuG_root",
-			"stop": "Y8HmuG_stop"
-		};
-		//#endregion
 		//#region src/client/Header.tsx
-		function Header({ useSession, stop, edit }) {
+		/** Mounts the pencil only. Native composer owns stop. */
+		function Header({ useSession, edit }) {
 			const running = useSession((snapshot) => snapshot.running);
 			const nodes = useSession((snapshot) => snapshot.nodes);
 			const messages = (0, react.useMemo)(() => snapshotUserMessages(nodes), [nodes]);
@@ -466,21 +537,10 @@ window.__ModuleLoader__.load({
 				messages,
 				running
 			]);
-			return /* @__PURE__ */ (0, react_jsx_runtime.jsxs)(react_jsx_runtime.Fragment, { children: [/* @__PURE__ */ (0, react_jsx_runtime.jsx)(Revise, {
+			return /* @__PURE__ */ (0, react_jsx_runtime.jsx)(Revise, {
 				allowed,
 				edit
-			}), running ? /* @__PURE__ */ (0, react_jsx_runtime.jsx)("div", {
-				className: Header_module_css_default["root"],
-				children: /* @__PURE__ */ (0, react_jsx_runtime.jsx)("button", {
-					type: "button",
-					className: Header_module_css_default["stop"],
-					title: "停止当前回复，之后可点修改并重新发送",
-					onClick: () => {
-						stop();
-					},
-					children: "■ 停止"
-				})
-			}) : null] });
+			});
 		}
 		//#endregion
 		//#region src/client/index.ts

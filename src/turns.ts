@@ -1,4 +1,4 @@
-import type { EditOperation, EditableUserMessage, VersionRecord } from './shared.ts'
+import type { EditOperation, EditableUserMessage, VersionOperation, VersionRecord } from './shared.ts'
 
 export interface FoldEvent {
   type: string
@@ -9,6 +9,7 @@ export interface FoldEvent {
     source?: { kind?: string }
     content?: ReadonlyArray<{ type: string; text?: string }>
     message?: { content?: ReadonlyArray<{ type: string; text?: string }> }
+    chunk?: unknown
   }
 }
 
@@ -35,11 +36,25 @@ export interface EditPlan {
   queuedUsers: QueuedUser[]
 }
 
-function pairVersion(sourceSessionId: string, before: string, after: string, turn: number, eventSeq: number, blockIndex: number): VersionRecord {
+export interface UnsendPlan {
+  boundary: number
+  version: VersionRecord
+  restoredText: string
+}
+
+function pairVersion(
+  sourceSessionId: string,
+  before: string,
+  after: string,
+  turn: number,
+  eventSeq: number,
+  blockIndex: number,
+  operation: VersionOperation = 'edit',
+): VersionRecord {
   return {
     effect: {
       id: crypto.randomUUID(),
-      operation: 'edit',
+      operation,
       cascade: 'truncate',
       targetTurn: turn,
       targetEventSeq: eventSeq,
@@ -136,5 +151,32 @@ export function planEdit(operation: EditOperation, events: readonly FoldEvent[])
     boundary: turn.startSeq - 1,
     version: pairVersion(operation.sessionId, before, operation.text, turn.turn, turn.user.seq, operation.blockIndex),
     queuedUsers: [replaceText(turn.user, operation.blockIndex, operation.text)],
+  }
+}
+
+function userPlainText(event: FoldEvent): string {
+  return (event.data.content ?? [])
+    .filter(block => block.type === 'text' && typeof block.text === 'string')
+    .map(block => block.text ?? '')
+    .join('\n')
+}
+
+/** Cut before the last user turn and restore its text. Does not queue a followup. */
+export function planUnsend(sessionId: string, events: readonly FoldEvent[]): UnsendPlan {
+  const { closed, open } = foldTurns(events)
+  const openUser = open?.user
+  const lastClosed = closed.at(-1)
+  const turn = openUser !== undefined && open !== undefined
+    ? { startSeq: open.startSeq, turn: open.turn, user: openUser }
+    : lastClosed?.user !== undefined
+      ? { startSeq: lastClosed.startSeq, turn: lastClosed.turn, user: lastClosed.user }
+      : undefined
+  if (turn === undefined) throw new Error('没有可收回的提问。')
+  const restoredText = userPlainText(turn.user)
+  if (restoredText.trim().length === 0) throw new Error('没有可收回的提问。')
+  return {
+    boundary: turn.startSeq - 1,
+    version: pairVersion(sessionId, restoredText, '', turn.turn, turn.user.seq, 0, 'unsend'),
+    restoredText,
   }
 }

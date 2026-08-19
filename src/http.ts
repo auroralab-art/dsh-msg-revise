@@ -1,4 +1,4 @@
-import { MAX_REQUEST_BODY_BYTES, TRUSTED_HOSTNAMES, type EditOperation } from './shared.ts'
+import { MAX_REQUEST_BODY_BYTES, TRUSTED_HOSTNAMES, type ReviseOperation } from './shared.ts'
 
 export function hostnameOf(hostOrOrigin: string): string | undefined {
   if (hostOrOrigin.startsWith('http://') || hostOrOrigin.startsWith('https://')) {
@@ -42,15 +42,18 @@ export class BodyTooLargeError extends Error {
   }
 }
 
-export function decodeEdit(value: unknown): EditOperation {
+export function decodeEdit(value: unknown): ReviseOperation {
   if (typeof value !== 'object' || value === null || Array.isArray(value)) {
     throw new TypeError('请求体必须是 JSON 对象。')
   }
   const record = value as Record<string, unknown>
-  if (record['action'] !== 'edit') throw new TypeError('action 必须是 edit。')
   if (typeof record['sessionId'] !== 'string' || record['sessionId'].length === 0) {
     throw new TypeError('sessionId 必须是非空字符串。')
   }
+  if (record['action'] === 'unsend') {
+    return { action: 'unsend', sessionId: record['sessionId'] }
+  }
+  if (record['action'] !== 'edit') throw new TypeError('action 必须是 edit 或 unsend。')
   if (!Number.isSafeInteger(record['eventSeq']) || (record['eventSeq'] as number) < 0) {
     throw new TypeError('eventSeq 必须是非负安全整数。')
   }

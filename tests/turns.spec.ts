@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest'
-import { editableUsers, foldTurns, planEdit, type FoldEvent } from '../src/turns.ts'
+import { editableUsers, foldTurns, planEdit, planUnsend, type FoldEvent } from '../src/turns.ts'
 
 function ev(type: string, data: FoldEvent['data'], seq: number): FoldEvent {
   return { type, seq, time: seq * 1000, data }
@@ -68,5 +68,14 @@ describe('planEdit', () => {
     }, events)
     expect(plan.boundary).toBe(-1)
     expect(plan.queuedUsers[0]?.content[0]?.text).toBe('EDITED first')
+  })
+})
+
+describe('planUnsend', () => {
+  it('cuts before the open tail and returns the original text', () => {
+    const plan = planUnsend('s-src', events)
+    expect(plan.boundary).toBe(3)
+    expect(plan.restoredText).toBe('second question (in flight)')
+    expect(plan.version.effect.operation).toBe('unsend')
   })
 })

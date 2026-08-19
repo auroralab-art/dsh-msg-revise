@@ -47,7 +47,7 @@ export function snapshotUserMessages(nodes: readonly ConversationNode[]): Editab
 }
 
 /**
- * Pencil is only for the last user prompt after the turn was stopped
+ * Pencil is only for the last user prompt after the native stop
  * (or never completed). Finished Q&A rows stay icon-free.
  */
 export function revisableAfterStop(

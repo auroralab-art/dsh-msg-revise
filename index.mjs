@@ -52,8 +52,12 @@ var BodyTooLargeError = class extends Error {
 function decodeEdit(value) {
 	if (typeof value !== "object" || value === null || Array.isArray(value)) throw new TypeError("请求体必须是 JSON 对象。");
 	const record = value;
-	if (record["action"] !== "edit") throw new TypeError("action 必须是 edit。");
 	if (typeof record["sessionId"] !== "string" || record["sessionId"].length === 0) throw new TypeError("sessionId 必须是非空字符串。");
+	if (record["action"] === "unsend") return {
+		action: "unsend",
+		sessionId: record["sessionId"]
+	};
+	if (record["action"] !== "edit") throw new TypeError("action 必须是 edit 或 unsend。");
 	if (!Number.isSafeInteger(record["eventSeq"]) || record["eventSeq"] < 0) throw new TypeError("eventSeq 必须是非负安全整数。");
 	if (!Number.isSafeInteger(record["blockIndex"]) || record["blockIndex"] < 0) throw new TypeError("blockIndex 必须是非负安全整数。");
 	if (typeof record["text"] !== "string") throw new TypeError("text 必须是字符串。");
@@ -93,11 +97,11 @@ function rememberVersion(childId, version, path = storePath()) {
 }
 //#endregion
 //#region src/turns.ts
-function pairVersion(sourceSessionId, before, after, turn, eventSeq, blockIndex) {
+function pairVersion(sourceSessionId, before, after, turn, eventSeq, blockIndex, operation = "edit") {
 	return {
 		effect: {
 			id: crypto.randomUUID(),
-			operation: "edit",
+			operation,
 			cascade: "truncate",
 			targetTurn: turn,
 			targetEventSeq: eventSeq,
@@ -175,8 +179,64 @@ function planEdit(operation, events) {
 		queuedUsers: [replaceText(turn.user, operation.blockIndex, operation.text)]
 	};
 }
+function userPlainText(event) {
+	return (event.data.content ?? []).filter((block) => block.type === "text" && typeof block.text === "string").map((block) => block.text ?? "").join("\n");
+}
+/** Cut before the last user turn and restore its text. Does not queue a followup. */
+function planUnsend(sessionId, events) {
+	const { closed, open } = foldTurns(events);
+	const openUser = open?.user;
+	const lastClosed = closed.at(-1);
+	const turn = openUser !== void 0 && open !== void 0 ? {
+		startSeq: open.startSeq,
+		turn: open.turn,
+		user: openUser
+	} : lastClosed?.user !== void 0 ? {
+		startSeq: lastClosed.startSeq,
+		turn: lastClosed.turn,
+		user: lastClosed.user
+	} : void 0;
+	if (turn === void 0) throw new Error("没有可收回的提问。");
+	const restoredText = userPlainText(turn.user);
+	if (restoredText.trim().length === 0) throw new Error("没有可收回的提问。");
+	return {
+		boundary: turn.startSeq - 1,
+		version: pairVersion(sessionId, restoredText, "", turn.turn, turn.user.seq, 0, "unsend"),
+		restoredText
+	};
+}
+//#endregion
+//#region src/ttft.ts
+function isNonEmpty(value) {
+	return typeof value === "string" && value.length > 0;
+}
+function eventIsFirstToken(event) {
+	if (event.type === "assistant/chunk") {
+		const chunk = event.data.chunk;
+		if (chunk === void 0 || typeof chunk !== "object" || chunk === null) return false;
+		const rec = chunk;
+		if ((rec.type === "text-delta" || rec.type === "reasoning-delta") && isNonEmpty(rec.text)) return true;
+		if (rec.type === "tool-call-delta" && (isNonEmpty(rec.argumentsDelta) || rec.name !== void 0)) return true;
+		return false;
+	}
+	if (event.type === "assistant/message") return (event.data.message?.content ?? []).some((block) => isNonEmpty(block.text));
+	return event.type === "tool/call";
+}
+/** TTFT of the last user turn only — earlier completed replies do not count. */
+function hasFirstToken(events) {
+	const { closed, open } = foldTurns(events);
+	const startSeq = open?.startSeq ?? closed.at(-1)?.startSeq;
+	if (startSeq === void 0) return events.some(eventIsFirstToken);
+	return events.some((event) => event.seq >= startSeq && eventIsFirstToken(event));
+}
 //#endregion
 //#region src/host.ts
+var FirstTokenReachedError = class extends Error {
+	constructor() {
+		super("首字已到达");
+		this.name = "FirstTokenReachedError";
+	}
+};
 const name = "msg-revise";
 const inject = [
 	"sessions",
@@ -359,6 +419,42 @@ async function runEdit(ctx, sessionId, eventSeq, blockIndex, text) {
 		}
 	});
 }
+async function runUnsend(ctx, sessionId) {
+	const sourceId = sessionId;
+	return withSourceAgent(ctx, sourceId, async (source) => {
+		const events = source.session.events;
+		const folded = asFoldEvents(events);
+		if (hasFirstToken(folded)) throw new FirstTokenReachedError();
+		const childId = "session-" + crypto.randomUUID();
+		const inverses = [];
+		try {
+			const plan = planUnsend(sessionId, folded);
+			const options = agentOptions(events, source.options);
+			const seed = inheritedSeed(source.session, plan.boundary);
+			const child = await createVersionAgent(ctx, source.session, childId, seed, options);
+			inverses.push(() => child.dispose());
+			const workspace = sourceWorkspace(ctx, sourceId);
+			if (workspace !== void 0) {
+				await workspace.attachSession(childId);
+				inverses.push(() => workspace.detachSession(childId));
+			}
+			rememberVersion(childId, plan.version);
+			inverses.length = 0;
+			return {
+				sessionId: childId,
+				queuedTurns: 0,
+				restoredText: plan.restoredText
+			};
+		} catch (error) {
+			try {
+				await recoverOperation(inverses);
+			} catch (recoveryError) {
+				throw new AggregateError([error, recoveryError], "收回提问及其恢复均失败。");
+			}
+			throw error;
+		}
+	});
+}
 function readJsonBody(request) {
 	return new Promise((resolve, reject) => {
 		const contentLength = Number(headerValue(request, "content-length") ?? "0");
@@ -416,7 +512,7 @@ async function handleRoute(ctx, request, response) {
 			return;
 		}
 		const operation = decodeEdit(await readJsonBody(request));
-		const result = await runEdit(ctx, operation.sessionId, operation.eventSeq, operation.blockIndex, operation.text);
+		const result = operation.action === "unsend" ? await runUnsend(ctx, operation.sessionId) : await runEdit(ctx, operation.sessionId, operation.eventSeq, operation.blockIndex, operation.text);
 		finalizeEdit(ctx, operation.sessionId, result.sessionId);
 		respondJson(response, 200, result);
 	} catch (error) {
