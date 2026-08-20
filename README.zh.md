@@ -13,13 +13,13 @@
 ## 安装
 
 ```bash
-dsh plugin --profile web add -w link:/Users/tangxiaoxi/work/dsh-sci/dsh-msg-revise
+dsh plugin --profile web add github:auroralab-art/dsh-msg-revise
 ```
 
-或在发布到 npm / GitHub 之后：
+本地开发：
 
 ```bash
-dsh plugin --profile web add github:<org>/dsh-msg-revise
+dsh plugin --profile web add -w link:/path/to/dsh-msg-revise
 ```
 
 然后重启 `dsh web`。

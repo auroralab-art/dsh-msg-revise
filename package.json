@@ -38,6 +38,14 @@
     "test": "vitest run",
     "check": "npm test && npm run build"
   },
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/auroralab-art/dsh-msg-revise.git"
+  },
+  "homepage": "https://github.com/auroralab-art/dsh-msg-revise#readme",
+  "bugs": {
+    "url": "https://github.com/auroralab-art/dsh-msg-revise/issues"
+  },
   "license": "MIT",
   "keywords": [
     "deepseek-harness",

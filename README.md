@@ -13,6 +13,12 @@ The previous version is archived so the sidebar stays one conversation. Version 
 ## Install
 
 ```bash
+dsh plugin --profile web add github:auroralab-art/dsh-msg-revise
+```
+
+Local development:
+
+```bash
 dsh plugin --profile web add -w link:/path/to/dsh-msg-revise
 ```
 
