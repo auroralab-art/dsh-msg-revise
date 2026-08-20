@@ -1,7 +1,7 @@
 {
   "name": "dsh-msg-revise",
   "version": "0.1.0",
-  "description": "After the native DSH stop, press 修改 on the user message, edit, then 重新发送.",
+  "description": "DeepSeek Harness plugin: edit and resend messages — stop the reply, revise your prompt in place, and re-run the turn with conversation forking",
   "type": "module",
   "main": "./index.mjs",
   "exports": {
