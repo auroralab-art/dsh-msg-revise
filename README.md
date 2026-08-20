@@ -35,16 +35,18 @@ Stock DSH has no way to edit a sent message or retry a turn with different wordi
 
 ## Quick Start
 
+Requires the `dsh` CLI and the `web` profile.
+
 ```sh
-dsh plugin --profile web add github:auroralab-art/dsh-msg-revise
+dsh plugin --profile web add https://github.com/auroralab-art/dsh-msg-revise/releases/download/v0.1.0/dsh-msg-revise-0.1.0.tgz
 ```
 
-Restart `dsh web`. That's it — the edit controls appear automatically when you stop a reply.
+Restart `dsh web` and hard-refresh the browser. The edit controls appear automatically when you stop a reply.
 
-Local development:
+Use the same command to update an existing installation. To remove:
 
 ```sh
-dsh plugin --profile web add link:$PWD
+dsh plugin --profile web remove dsh-msg-revise
 ```
 
 ## How does it work?
@@ -130,7 +132,10 @@ MIT. See [LICENSE](LICENSE).
 pnpm install
 pnpm test
 pnpm run build
-dsh plugin --profile web add link:$PWD
+npm pack                                     # produces dsh-msg-revise-0.1.0.tgz
+dsh plugin --profile web add link:$PWD       # development mode (live-links the checkout)
 ```
 
-Restart `dsh web` after install. Tests parse the DSH source (`vitest.config.ts`'s `DSH_ROOT`).
+Restart `dsh web` after install. `link:$PWD` is for local iteration — use the tgz URL for distribution.
+
+Tests parse the DSH source (`vitest.config.ts`'s `DSH_ROOT`, default `~/.dsh/source/current`).

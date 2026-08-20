@@ -35,16 +35,18 @@
 
 ## 快速开始
 
+需要本机已安装 `dsh` CLI，并使用 `web` profile。
+
 ```sh
-dsh plugin --profile web add github:auroralab-art/dsh-msg-revise
+dsh plugin --profile web add https://github.com/auroralab-art/dsh-msg-revise/releases/download/v0.1.0/dsh-msg-revise-0.1.0.tgz
 ```
 
-重启 `dsh web`。完成 — 停止回复时编辑控件会自动出现。
+重启 `dsh web` 并硬刷新浏览器。停止回复时编辑控件会自动出现。
 
-本地开发：
+已有安装也用同一条命令更新。卸载：
 
 ```sh
-dsh plugin --profile web add link:$PWD
+dsh plugin --profile web remove dsh-msg-revise
 ```
 
 ## 工作原理
@@ -130,7 +132,10 @@ MIT。见 [LICENSE](LICENSE)。
 pnpm install
 pnpm test
 pnpm run build
-dsh plugin --profile web add link:$PWD
+npm pack                                     # 产出 dsh-msg-revise-0.1.0.tgz
+dsh plugin --profile web add link:$PWD       # 开发模式（链接本地检出）
 ```
 
-安装后重启 `dsh web`。测试解析 DSH 源码（`vitest.config.ts` 的 `DSH_ROOT`）。
+安装后重启 `dsh web`。`link:$PWD` 仅用于本地迭代 — 分发请使用 tgz URL。
+
+测试解析 DSH 源码（`vitest.config.ts` 的 `DSH_ROOT`，默认 `~/.dsh/source/current`）。
